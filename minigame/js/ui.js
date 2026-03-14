@@ -10,138 +10,289 @@ import gameCore from "./gameCore.js";
  */
 class UIManager {
   constructor() {
-    this.ctx = null; // Canvas上下文
+    // 核心属性
+    this.ctx = null;
     this.canvas = null;
-    this.dpr = 1; // 设备像素比，适配高清屏
-    this.currentScene = config.scene.LOBBY; // 当前场景
+    this.dpr = 2;
+    this.currentScene = config.scene.LOBBY;
     
-    // 按钮区域缓存，用于触摸点击判断
+    // 按钮点击区域缓存
     this.buttonRects = [];
 
     // 输入相关
-    this.inputFocus = null; // 当前聚焦的输入框
+    this.activeInput = null;
+    this.inputConfig = {};
     this.inputValue = {
       roomId: "",
       password: "",
       roomName: "",
       desc: ""
-
     };
-    this.initInput();
+
+    // 事件绑定锁，绝对避免重复绑定
+    this._eventBinded = false;
+
+    // 【核心修复】构造函数里直接绑定小游戏全局触摸事件，彻底解决事件不触发的问题
+    this._bindGlobalTouchEvent();
   }
 
-  // 初始化Canvas
+  // 【新增】绑定小游戏全局触摸事件，全机型兼容
+  _bindGlobalTouchEvent() {
+    if (this._eventBinded) return;
+
+    console.log("🔗 绑定小游戏全局触摸事件");
+    // 全局触摸开始
+    wx.onTouchStart((e) => {
+      this.handleTouchStart(e);
+    });
+
+    // 全局触摸结束（核心点击逻辑）
+    wx.onTouchEnd((e) => {
+      this.handleTouchEnd(e);
+    });
+
+    this._eventBinded = true;
+    console.log("✅ 全局触摸事件绑定完成");
+  }
+
+  // 自定义圆角矩形（兼容小游戏）
+  drawRoundRect(x, y, width, height, radius) {
+    if (!this.ctx) return;
+    this.ctx.beginPath();
+    this.ctx.moveTo(x + radius, y);
+    this.ctx.lineTo(x + width - radius, y);
+    this.ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+    this.ctx.lineTo(x + width, y + height - radius);
+    this.ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+    this.ctx.lineTo(x + radius, y + height);
+    this.ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+    this.ctx.lineTo(x, y + radius);
+    this.ctx.quadraticCurveTo(x, y, x + radius, y);
+    this.ctx.closePath();
+  }
+
+  // Canvas初始化
   init(canvas) {
+    // 1. 强校验canvas有效性
+    if (!canvas) {
+      console.error("❌ UI初始化失败：传入的canvas为空");
+      return;
+    }
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d");
-    this.dpr = wx.getWindowInfo().pixelRatio || 2;
-    
-    // 设置Canvas尺寸，适配高清屏
-    canvas.width = config.canvasWidth * this.dpr;
-    canvas.height = config.canvasHeight * this.dpr;
+    console.log("✅ 拿到Canvas和上下文对象");
+
+    // 2. 【修复1】获取设备信息，统一适配逻辑
+    let systemInfo = {};
+    try {
+      if (wx.getWindowInfo) {
+        systemInfo = wx.getWindowInfo();
+      } else {
+        systemInfo = wx.getSystemInfoSync();
+      }
+    } catch (e) {
+      console.warn("获取设备信息失败，用默认值", e);
+    }
+    this.dpr = systemInfo.pixelRatio || systemInfo.devicePixelRatio || 2;
+    const logicWidth = systemInfo.windowWidth || 375;
+    const logicHeight = systemInfo.windowHeight || 667;
+
+    // 3. 强制同步config的画布尺寸，和屏幕逻辑尺寸完全一致
+    config.canvasWidth = logicWidth;
+    config.canvasHeight = logicHeight;
+
+    // 4. 设置Canvas物理像素尺寸（高清屏绘制）
+    canvas.width = logicWidth * this.dpr;
+    canvas.height = logicHeight * this.dpr;
+
+    // 5. 重置画布缩放，确保绘制逻辑和坐标完全匹配
+    this.ctx.resetTransform();
     this.ctx.scale(this.dpr, this.dpr);
-    
-    // 绑定触摸事件
-    canvas.addEventListener("touchstart", this.handleTouchStart.bind(this));
-    canvas.addEventListener("touchend", this.handleTouchEnd.bind(this));
 
-    // 开启微信输入框（小游戏没有原生input，用wx.createInput）
+    // 6. 初始化输入框配置
     this.initInput();
+
+    console.log("===== UI初始化完成 =====");
+    console.log("设备dpr：", this.dpr);
+    console.log("画布逻辑尺寸：", logicWidth, logicHeight);
+    console.log("画布物理尺寸：", canvas.width, canvas.height);
   }
 
-  // 初始化输入框
-// 初始化输入框管理
-initInput() {
-  this.activeInput = null // 当前激活的输入框实例
-  this.inputConfig = {
-    roomId: {
-      type: 'number',
-      placeholder: '请输入6位房间号',
-      maxLength: 6,
-      bindKey: 'roomId'
-    },
-    password: {
-      type: 'number',
-      placeholder: '请输入房间密码',
-      maxLength: 6,
-      bindKey: 'password',
-      secure: true
-    },
-    roomName: {
-      type: 'text',
-      placeholder: '请输入房间名称',
-      maxLength: 20,
-      bindKey: 'roomName'
-    },
-    desc: {
-      type: 'text',
-      placeholder: '请输入你的描述',
-      maxLength: 50,
-      bindKey: 'desc'
+  // 初始化输入框配置
+  initInput() {
+    this.activeInput = null;
+    this.inputConfig = {
+      roomId: {
+        type: 'number',
+        placeholder: '请输入6位房间号',
+        maxLength: 6,
+        bindKey: 'roomId'
+      },
+      password: {
+        type: 'number',
+        placeholder: '请输入房间密码',
+        maxLength: 6,
+        bindKey: 'password',
+        secure: true
+      },
+      roomName: {
+        type: 'text',
+        placeholder: '请输入房间名称',
+        maxLength: 20,
+        bindKey: 'roomName'
+      },
+      desc: {
+        type: 'text',
+        placeholder: '请输入你的描述',
+        maxLength: 50,
+        bindKey: 'desc'
+      }
+    };
+    console.log("✅ 输入框配置初始化完成");
+  }
+
+  // 小游戏兼容版输入弹窗（全环境可用）
+  showInput(inputType) {
+    const config = this.inputConfig[inputType];
+    if (!config) return;
+
+    console.log("✅ 唤起输入弹窗：", inputType);
+    wx.showModal({
+      title: config.placeholder,
+      editable: true,
+      placeholderText: config.placeholder,
+      maxLength: config.maxLength,
+      inputType: config.type === 'number' ? 'number' : 'text',
+      secureTextEntry: config.secure || false,
+      confirmText: "确认",
+      success: (res) => {
+        if (res.confirm && res.content !== undefined) {
+          this.inputValue[config.bindKey] = res.content;
+          console.log("输入完成，内容已同步：", config.bindKey, res.content);
+        }
+      },
+      fail: (err) => {
+        console.error("输入弹窗失败：", err);
+      }
+    });
+  }
+
+  // 空方法兼容原有调用
+  hideInput() {
+    return;
+  }
+
+  // 触摸开始事件（仅日志，无业务逻辑）
+  handleTouchStart(e) {
+    const touch = e.changedTouches?.[0] || e.touches?.[0];
+    if (touch) {
+      console.log("👆 触摸开始，原始坐标：", { x: touch.clientX, y: touch.clientY });
     }
   }
-}
 
-// 唤起输入框
-showInput(inputType) {
-  // 先销毁之前的输入框
-  this.hideInput()
-
-  const config = this.inputConfig[inputType]
-  if (!config) return
-
-  // 创建输入框实例
-  this.activeInput = wx.createInput({
-    type: config.type,
-    placeholder: config.placeholder,
-    maxLength: config.maxLength,
-    secureTextEntry: config.secure || false,
-    style: {
-      position: 'absolute',
-      left: '-9999px', // 移出屏幕外，只保留键盘功能
-      top: '-9999px',
-      width: '1px',
-      height: '1px'
+  // 触摸结束事件，核心点击逻辑，全链路日志
+  async handleTouchEnd(e) {
+    console.log("===== 触摸结束，开始处理点击 =====");
+    
+    // 1. 前置校验
+    if (!config.canvasWidth || !config.canvasHeight) {
+      console.error("❌ 画布尺寸未初始化");
+      return;
     }
-  })
 
-  // 监听输入
-  this.activeInput.onInput((e) => {
-    this.inputValue[config.bindKey] = e.value
-  })
+    // 2. 稳定获取触摸点（兼容真机所有情况）
+    const touch = e.changedTouches?.[0] || e.touches?.[0];
+    if (!touch) {
+      console.log("❌ 未获取到有效触摸点");
+      return;
+    }
 
-  // 监听完成
-  this.activeInput.onConfirm(() => {
-    this.hideInput()
-  })
+    // 3. 核心：触摸坐标直接使用clientX/clientY，和绘制逻辑完全匹配
+    const touchPos = {
+      x: touch.clientX,
+      y: touch.clientY
+    };
 
-  // 自动聚焦，唤起键盘
-  this.activeInput.focus()
-}
+    console.log("🎯 最终点击坐标：", touchPos);
+    console.log("📍 当前场景：", this.currentScene);
 
-// 隐藏并销毁输入框
-hideInput() {
-  if (this.activeInput) {
-    this.activeInput.blur()
-    this.activeInput.destroy()
-    this.activeInput = null
+    // ========== 第一步：处理输入框点击 ==========
+    if (this.currentScene === config.scene.LOBBY) {
+      // 大厅-房间号输入框
+      const roomIdRect = { x:30, y:200, width: config.canvasWidth-60, height:50 };
+      console.log("📦 房间号输入框区域：", roomIdRect);
+      if (utils.isPointInRect(touchPos, roomIdRect)) {
+        console.log("✅ 命中房间号输入框");
+        this.showInput('roomId');
+        return;
+      }
+
+      // 大厅-密码输入框
+      const pwdRect = { x:30, y:270, width: config.canvasWidth-60, height:50 };
+      console.log("📦 密码输入框区域：", pwdRect);
+      if (utils.isPointInRect(touchPos, pwdRect)) {
+        console.log("✅ 命中密码输入框");
+        this.showInput('password');
+        return;
+      }
+    }
+
+    // 创建房间场景-房间名称输入框
+    if (this.currentScene === config.scene.CREATE_ROOM) {
+      const roomNameRect = { x:30, y:120, width: config.canvasWidth-60, height:50 };
+      if (utils.isPointInRect(touchPos, roomNameRect)) {
+        console.log("✅ 命中房间名称输入框");
+        this.showInput('roomName');
+        return;
+      }
+    }
+
+    // 游戏场景-描述输入框
+    if (this.currentScene === config.scene.GAME && gameCore.currentPhase === config.gamePhase.SPEAKING) {
+      const currentSpeaker = gameCore.speakOrder?.[gameCore.currentSpeakerIndex];
+      if (currentSpeaker === player.openId) {
+        const descRect = { x:30, y:180, width: config.canvasWidth-60, height:100 };
+        if (utils.isPointInRect(touchPos, descRect)) {
+          console.log("✅ 命中描述输入框");
+          this.showInput('desc');
+          return;
+        }
+      }
+    }
+
+    // ========== 第二步：处理按钮点击 ==========
+    console.log("🔘 当前可点击按钮数量：", this.buttonRects.length);
+    if (this.buttonRects.length === 0) {
+      console.log("⚠️ 没有可点击的按钮，跳过按钮判断");
+      return;
+    }
+
+    // 遍历按钮，判断命中
+    for (const btn of this.buttonRects) {
+      const isHit = utils.isPointInRect(touchPos, btn.rect);
+      console.log(`检查按钮【${btn.key}】，区域：`, btn.rect, `是否命中：${isHit}`);
+      
+      if (isHit) {
+        console.log("🎉 命中按钮，触发点击事件：", btn.key);
+        await this.handleButtonClick(btn.key);
+        break;
+      }
+    }
   }
-}
 
   // 清空画布
   clear() {
+    if (!this.ctx) return;
     this.ctx.clearRect(0, 0, config.canvasWidth, config.canvasHeight);
   }
 
-  // 主渲染方法，根据当前场景渲染对应内容
+  // 主渲染入口
   render() {
     this.clear();
-    this.buttonRects = []; // 清空按钮缓存
-
-    // 绘制背景
+    this.buttonRects = []; // 每次渲染清空按钮缓存，避免旧数据干扰
     this.drawBg();
 
-    // 根据场景渲染
+    // 按场景渲染
     switch (this.currentScene) {
       case config.scene.LOBBY:
         this.renderLobby();
@@ -163,18 +314,19 @@ hideInput() {
 
   // 绘制背景
   drawBg() {
+    if (!this.ctx) return;
     this.ctx.fillStyle = "#1a1a2e";
     this.ctx.fillRect(0, 0, config.canvasWidth, config.canvasHeight);
   }
 
-  // 绘制按钮通用方法
+  // 通用按钮绘制方法
   drawButton(options) {
+    if (!this.ctx) return;
     const { x, y, width, height, text, bgColor = "#4361ee", textColor = "#fff", fontSize = 16, radius = 8, key } = options;
     
     // 绘制按钮背景
     this.ctx.fillStyle = bgColor;
-    this.ctx.beginPath();
-    this.ctx.roundRect(x, y, width, height, radius);
+    this.drawRoundRect(x, y, width, height, radius);
     this.ctx.fill();
 
     // 绘制按钮文字
@@ -188,8 +340,9 @@ hideInput() {
     this.buttonRects.push({ key, rect: { x, y, width, height } });
   }
 
-  // 绘制文本通用方法
+  // 通用文本绘制方法
   drawText(options) {
+    if (!this.ctx) return;
     const { text, x, y, fontSize = 14, color = "#fff", textAlign = "left", textBaseline = "top" } = options;
     this.ctx.fillStyle = color;
     this.ctx.font = `${fontSize}px sans-serif`;
@@ -198,7 +351,7 @@ hideInput() {
     this.ctx.fillText(text, x, y);
   }
 
-  // ==================== 场景1：大厅场景 ====================
+  // ==================== 大厅场景 ====================
   renderLobby() {
     // 标题
     this.drawText({
@@ -212,7 +365,7 @@ hideInput() {
 
     // 房间号输入框
     this.ctx.fillStyle = "#2a2a42";
-    this.ctx.roundRect(30, 200, config.canvasWidth - 60, 50, 8);
+    this.drawRoundRect(30, 200, config.canvasWidth - 60, 50, 8);
     this.ctx.fill();
     this.drawText({
       text: this.inputValue.roomId || "请输入6位房间号",
@@ -224,7 +377,7 @@ hideInput() {
 
     // 密码输入框
     this.ctx.fillStyle = "#2a2a42";
-    this.ctx.roundRect(30, 270, config.canvasWidth - 60, 50, 8);
+    this.drawRoundRect(30, 270, config.canvasWidth - 60, 50, 8);
     this.ctx.fill();
     this.drawText({
       text: this.inputValue.password ? "●".repeat(this.inputValue.password.length) : "请输入房间密码（选填）",
@@ -259,7 +412,7 @@ hideInput() {
     });
   }
 
-  // ==================== 场景2：创建房间场景 ====================
+  // ==================== 创建房间场景 ====================
   renderCreateRoom() {
     this.drawText({
       text: "创建房间",
@@ -271,7 +424,7 @@ hideInput() {
 
     // 房间名称输入框
     this.ctx.fillStyle = "#2a2a42";
-    this.ctx.roundRect(30, 120, config.canvasWidth - 60, 50, 8);
+    this.drawRoundRect(30, 120, config.canvasWidth - 60, 50, 8);
     this.ctx.fill();
     this.drawText({
       text: this.inputValue.roomName || `${player.userInfo?.nickName || "我的"}的房间`,
@@ -306,7 +459,7 @@ hideInput() {
         width: 60,
         height: 40,
         text: `${num}人`,
-        bgColor: config.room.defaultMaxPlayers === num ? "#4361ee" : "#2a2a42",
+        bgColor: (config.room?.defaultMaxPlayers || 8) === num ? "#4361ee" : "#2a2a42",
         fontSize: 14
       });
     });
@@ -329,7 +482,7 @@ hideInput() {
         width: 100,
         height: 40,
         text: mode,
-        bgColor: config.room.defaultMode === mode.toLowerCase() ? "#4361ee" : "#2a2a42",
+        bgColor: (config.room?.defaultMode || "经典") === mode.toLowerCase() ? "#4361ee" : "#2a2a42",
         fontSize: 14
       });
     });
@@ -356,7 +509,7 @@ hideInput() {
     });
   }
 
-  // ==================== 场景3：房间等待场景 ====================
+  // ==================== 房间等待场景 ====================
   renderRoom() {
     if (!room.roomData) return;
 
@@ -368,8 +521,9 @@ hideInput() {
       fontSize: 20,
       textAlign: "center"
     });
+    // 【修复2】房间号直接取 room.roomId，或者 room.roomData._id
     this.drawText({
-      text: `房间号：${room.roomData.roomId}`,
+      text: `房间号：${room.roomId}`,
       x: config.canvasWidth / 2,
       y: 70,
       fontSize: 16,
@@ -379,7 +533,7 @@ hideInput() {
 
     // 玩家列表
     this.drawText({
-      text: `玩家列表 (${room.roomData.players.length}/${room.roomData.maxPlayers})`,
+      text: `玩家列表 (${room.roomData.players?.length || 0}/${room.roomData.maxPlayers || 8})`,
       x: 30,
       y: 110,
       fontSize: 16,
@@ -387,7 +541,7 @@ hideInput() {
     });
 
     // 绘制玩家卡片
-    const players = room.roomData.players;
+    const players = room.roomData.players || [];
     players.forEach((playerItem, index) => {
       const row = Math.floor(index / 2);
       const col = index % 2;
@@ -398,7 +552,7 @@ hideInput() {
 
       // 卡片背景
       this.ctx.fillStyle = "#2a2a42";
-      this.ctx.roundRect(x, y, width, height, 8);
+      this.drawRoundRect(x, y, width, height, 8);
       this.ctx.fill();
 
       // 房主皇冠
@@ -474,7 +628,7 @@ hideInput() {
     });
   }
 
-  // ==================== 场景4：游戏中场景 ====================
+  // ==================== 游戏中场景 ====================
   renderGame() {
     if (!room.roomData) return;
 
@@ -518,7 +672,7 @@ hideInput() {
     if (gameCore.currentPhase === config.gamePhase.VIEW_WORD) {
       // 词语卡片
       this.ctx.fillStyle = "#2a2a42";
-      this.ctx.roundRect(50, 150, config.canvasWidth - 100, 200, 12);
+      this.drawRoundRect(50, 150, config.canvasWidth - 100, 200, 12);
       this.ctx.fill();
 
       // 身份提示
@@ -562,8 +716,8 @@ hideInput() {
 
     // 2. 发言阶段
     if (gameCore.currentPhase === config.gamePhase.SPEAKING) {
-      const currentSpeakerOpenId = gameCore.speakOrder[gameCore.currentSpeakerIndex];
-      const currentSpeaker = room.roomData.players.find(p => p.openId === currentSpeakerOpenId);
+      const currentSpeakerOpenId = gameCore.speakOrder?.[gameCore.currentSpeakerIndex];
+      const currentSpeaker = room.roomData.players?.find(p => p.openId === currentSpeakerOpenId);
       
       // 当前发言人提示
       this.drawText({
@@ -579,7 +733,7 @@ hideInput() {
       if (currentSpeakerOpenId === player.openId) {
         // 描述输入框
         this.ctx.fillStyle = "#2a2a42";
-        this.ctx.roundRect(30, 180, config.canvasWidth - 60, 100, 8);
+        this.drawRoundRect(30, 180, config.canvasWidth - 60, 100, 8);
         this.ctx.fill();
         this.drawText({
           text: this.inputValue.desc || "请输入你的描述，不能直接说词语哦",
@@ -610,7 +764,7 @@ hideInput() {
         color: "#fff"
       });
 
-      room.roomData.players.forEach((p, index) => {
+      (room.roomData.players || []).forEach((p, index) => {
         const x = 30 + (index % 3) * 105;
         const y = 410 + Math.floor(index / 3) * 70;
         const width = 100;
@@ -618,7 +772,7 @@ hideInput() {
 
         // 卡片背景
         this.ctx.fillStyle = p.isAlive ? "#2a2a42" : "#111";
-        this.ctx.roundRect(x, y, width, height, 6);
+        this.drawRoundRect(x, y, width, height, 6);
         this.ctx.fill();
 
         // 昵称
@@ -665,7 +819,7 @@ hideInput() {
       });
 
       // 投票玩家列表
-      const alivePlayers = room.roomData.players.filter(p => p.isAlive);
+      const alivePlayers = (room.roomData.players || []).filter(p => p.isAlive);
       alivePlayers.forEach((p, index) => {
         const row = Math.floor(index / 2);
         const col = index % 2;
@@ -676,7 +830,7 @@ hideInput() {
 
         // 卡片背景
         this.ctx.fillStyle = "#2a2a42";
-        this.ctx.roundRect(x, y, width, height, 8);
+        this.drawRoundRect(x, y, width, height, 8);
         this.ctx.fill();
 
         // 昵称
@@ -703,7 +857,7 @@ hideInput() {
       });
 
       // 弃权按钮
-      if (config.rule.allowAbstain) {
+      if (config.rule?.allowAbstain) {
         this.drawButton({
           key: "vote_abstain",
           x: 30,
@@ -718,7 +872,7 @@ hideInput() {
     }
   }
 
-  // ==================== 场景5：结算场景 ====================
+  // ==================== 结算场景 ====================
   renderSettlement() {
     if (!room.roomData) return;
 
@@ -759,11 +913,11 @@ hideInput() {
       color: "#fff"
     });
 
-    room.roomData.players.forEach((p, index) => {
+    (room.roomData.players || []).forEach((p, index) => {
       const y = 250 + index * 50;
       // 背景
       this.ctx.fillStyle = "#2a2a42";
-      this.ctx.roundRect(30, y, config.canvasWidth - 60, 40, 6);
+      this.drawRoundRect(30, y, config.canvasWidth - 60, 40, 6);
       this.ctx.fill();
 
       // 昵称
@@ -819,61 +973,15 @@ hideInput() {
     });
   }
 
-  // ==================== 触摸事件处理 ====================
-  // 补充到 handleTouchEnd 方法里，在按钮判断之前，先处理输入框点击
-async handleTouchEnd(e) {
-  const touchEndPos = {
-    x: e.changedTouches[0].clientX / this.dpr,
-    y: e.changedTouches[0].clientY / this.dpr
-  };
-
-  // ========== 新增：输入框点击唤起 ==========
-  // 大厅场景：房间号输入框
-  if (this.currentScene === config.scene.LOBBY) {
-    // 房间号输入框区域
-    if (utils.isPointInRect(touchEndPos, { x:30, y:200, width: config.canvasWidth-60, height:50 })) {
-      this.showInput('roomId')
-      return
-    }
-    // 密码输入框区域
-    if (utils.isPointInRect(touchEndPos, { x:30, y:270, width: config.canvasWidth-60, height:50 })) {
-      this.showInput('password')
-      return
-    }
-  }
-
-  // 创建房间场景：房间名称输入框
-  if (this.currentScene === config.scene.CREATE_ROOM) {
-    if (utils.isPointInRect(touchEndPos, { x:30, y:120, width: config.canvasWidth-60, height:50 })) {
-      this.showInput('roomName')
-      return
-    }
-  }
-
-  // 游戏场景：描述输入框
-  if (this.currentScene === config.scene.GAME && gameCore.currentPhase === config.gamePhase.SPEAKING) {
-    const currentSpeakerOpenId = gameCore.speakOrder[gameCore.currentSpeakerIndex]
-    if (currentSpeakerOpenId === player.openId) {
-      if (utils.isPointInRect(touchEndPos, { x:30, y:180, width: config.canvasWidth-60, height:100 })) {
-        this.showInput('desc')
-        return
-      }
-    }
-  }
-  // ========== 输入框处理结束 ==========
-
-  // 原有按钮判断逻辑不变
-  for (const item of this.buttonRects) {
-    if (utils.isPointInRect(touchEndPos, item.rect)) {
-      this.handleButtonClick(item.key);
-      break;
-    }
-  }
-}
-
   // 按钮点击事件处理
   async handleButtonClick(key) {
-    utils.audio.play("audio/click.mp3");
+    console.log("开始处理按钮点击：", key);
+    // 【修复3】音频播放加容错，路径修正
+    try {
+      utils.audio.play("audio/click.mp3");
+    } catch (e) {
+      console.log("点击音效播放失败（可忽略）", e);
+    }
 
     // 大厅场景按钮
     if (this.currentScene === config.scene.LOBBY) {
@@ -884,6 +992,12 @@ async handleTouchEnd(e) {
         }
         const res = await room.joinRoom(this.inputValue.roomId, this.inputValue.password);
         if (res.success) {
+          // ✅ 【必须加】给全局room对象赋值
+          room.roomId = res.roomId;
+          room.roomData = res.roomData;
+          // ✅ 【必须加】启动房间数据实时监听
+          room.watchRoomData();
+          // 切换场景
           this.currentScene = config.scene.ROOM;
         } else {
           wx.showToast({ title: res.msg || "加入房间失败", icon: "none" });
@@ -899,25 +1013,64 @@ async handleTouchEnd(e) {
       if (key === "backLobby") {
         this.currentScene = config.scene.LOBBY;
       }
+      // 【修复4】核心：重写创建房间逻辑
       if (key === "confirmCreateRoom") {
-        const res = await room.createRoom({
-          name: this.inputValue.roomName
-        });
-        if (res.success) {
-          this.currentScene = config.scene.ROOM;
-        } else {
+        try {
+          wx.showLoading({ title: "创建房间中..." });
+          
+          // 1. 取用户选的人数
+          const selectedMaxPlayers = config.room?.defaultMaxPlayers || 8;
+
+          // 2. 直接调云函数
+          const res = await wx.cloud.callFunction({
+            name: "createRoom",
+            data: {
+              name: this.inputValue.roomName || `${player.userInfo?.nickName || "我的"}的房间`,
+              maxPlayers: selectedMaxPlayers,
+              password: "",
+              nickName: player.userInfo?.nickName || "玩家",
+              avatarUrl: player.userInfo?.avatarUrl || ""
+            }
+          });
+
+          wx.hideLoading();
+          // 3. 正确取云函数返回值
+          const result = res.result;
+
+          if (result.success) {
+            console.log("✅ 创建房间成功", result);
+            
+            // 4. 【核心】给全局room对象赋值
+            room.roomId = result.roomId;
+            room.roomData = result.roomData;
+            
+            // 5. 启动实时监听
+            room.watchRoomData();
+            
+            // 6. 切换场景
+            this.currentScene = config.scene.ROOM;
+          } else {
+            wx.showToast({ title: result.msg || "创建失败", icon: "none" });
+          }
+        } catch (err) {
+          wx.hideLoading();
+          console.error("❌ 创建房间报错", err);
           wx.showToast({ title: "创建房间失败", icon: "none" });
         }
       }
-      // 人数选择
+      // 【修复5】人数选择，加UI刷新
       if (key.startsWith("setPlayerNum_")) {
         const num = parseInt(key.split("_")[1]);
+        if (!config.room) config.room = {};
         config.room.defaultMaxPlayers = num;
+        this.render(); // 必须刷新UI
       }
-      // 模式选择
+      // 模式选择，加UI刷新
       if (key.startsWith("setMode_")) {
         const mode = key.split("_")[1].toLowerCase();
+        if (!config.room) config.room = {};
         config.room.defaultMode = mode;
+        this.render(); // 必须刷新UI
       }
     }
 
@@ -955,7 +1108,6 @@ async handleTouchEnd(e) {
       if (key.startsWith("vote_")) {
         const targetOpenId = key.split("_")[1];
         gameCore.playerVote(targetOpenId);
-        // 提交投票
         await gameCore.submitVoteResult();
       }
     }

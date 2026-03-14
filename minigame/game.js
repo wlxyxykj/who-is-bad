@@ -36,25 +36,25 @@ wx.onHide(() => {
   utils.audio.pauseAll();
 });
 
-// 6. 处理返回键
-wx.onBackPress(() => {
-  if (ui.currentScene !== config.scene.LOBBY) {
-    if (ui.currentScene === config.scene.ROOM || ui.currentScene === config.scene.GAME) {
-      wx.showModal({
-        title: "提示",
-        content: "确定要退出房间吗？",
-        success: async (res) => {
-          if (res.confirm) {
-            await room.exitRoom();
-            gameCore.reset();
-            ui.currentScene = config.scene.LOBBY;
-          }
-        }
-      });
-    } else {
-      ui.currentScene = config.scene.LOBBY;
-    }
-    return true; // 拦截默认返回行为
-  }
-  return false; // 不拦截，退出小游戏
-});
+// // 6. 处理返回键
+// wx.onBackPress(() => {
+//   if (ui.currentScene !== config.scene.LOBBY) {
+//     if (ui.currentScene === config.scene.ROOM || ui.currentScene === config.scene.GAME) {
+//       wx.showModal({
+//         title: "提示",
+//         content: "确定要退出房间吗？",
+//         success: async (res) => {
+//           if (res.confirm) {
+//             await room.exitRoom();
+//             gameCore.reset();
+//             ui.currentScene = config.scene.LOBBY;
+//           }
+//         }
+//       });
+//     } else {
+//       ui.currentScene = config.scene.LOBBY;
+//     }
+//     return true; // 拦截默认返回行为
+//   }
+//   return false; // 不拦截，退出小游戏
+// });

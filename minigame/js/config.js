@@ -2,13 +2,30 @@
  * 谁是卧底 全局配置文件
  * 严格匹配需求文档的所有参数
  */
+
+// 【修复1】获取设备屏幕信息，动态计算画布尺寸
+let systemInfo = {};
+try {
+  if (wx.getWindowInfo) {
+    systemInfo = wx.getWindowInfo();
+  } else {
+    systemInfo = wx.getSystemInfoSync();
+  }
+} catch (e) {
+  console.warn("获取设备信息失败，用默认值", e);
+}
+// 画布逻辑宽高 = 手机屏幕的可视宽高，和触摸坐标完全匹配
+const canvasWidth = systemInfo.windowWidth || 375;
+const canvasHeight = systemInfo.windowHeight || 667;
+
 export default {
   // 云开发环境ID，替换成你自己的！
   envId: "cloud1-6gpaxpo995b92a8f",
   
-  // 画布尺寸（适配微信小游戏，固定竖屏尺寸）
-  canvasWidth: 375,
-  canvasHeight: 667,
+
+  // 核心画布尺寸（必须动态适配，不能写死750这类固定值）
+  canvasWidth: canvasWidth,
+  canvasHeight: canvasHeight,
 
   // 房间基础配置
   room: {
@@ -17,12 +34,14 @@ export default {
     playerLimit: [4,12],
     defaultMaxPlayers: 8,
     ownerTransferTime: 20, // 房主未准备自动转让时间（秒）
-    defaultMode: "classic", // 经典模式
+    // 【修复2】模式改成中文，和ui.js里的判断逻辑匹配
+    defaultMode: "经典", // 经典模式
     allowJoinMidGame: false // 默认不允许中途加入
   },
 
   // 人数-卧底数量配置表（严格匹配需求）
   roleConfig: {
+    3:{undercover:1,civilian:2,whiteboard:0},
     4: { undercover: 1, civilian: 3, whiteboard: 0 },
     5: { undercover: 1, civilian: 4, whiteboard: 0 },
     6: { undercover: 1, civilian: 5, whiteboard: 1 },

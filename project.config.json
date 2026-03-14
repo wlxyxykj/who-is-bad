@@ -1,0 +1,19 @@
+{
+  "description": "谁是卧底小游戏项目配置",
+  "packOptions": {
+    "ignore": []
+  },
+  "setting": {
+    "urlCheck": false,
+    "es6": true,
+    "enhance": true,
+    "postcss": true,
+    "minified": true
+  },
+  "compileType": "game",
+  "libVersion": "2.19.4",
+  "appid": "wx420f74b3d8ce2535",
+  "projectname": "谁是卧底",
+  "cloudfunctionRoot": "cloudfunctions/",
+  "miniprogramRoot": "minigame/"
+}

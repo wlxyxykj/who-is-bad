@@ -130,14 +130,17 @@ const utils = {
   /**
    * 坐标判断：判断点击是否在矩形区域内
    */
-  isPointInRect: function (point, rect) {
-    return (
-      point.x >= rect.x &&
-      point.x <= rect.x + rect.width &&
-      point.y >= rect.y &&
-      point.y <= rect.y + rect.height
-    );
-  },
+/**
+ * 坐标判断：判断点击是否在矩形区域内
+ */
+isPointInRect: function (point, rect) {
+  return (
+    point.x >= rect.x &&
+    point.x <= rect.x + rect.width &&
+    point.y >= rect.y &&
+    point.y <= rect.y + rect.height
+  );
+},
 
   /**
    * 文本适配：截断超长文本
@@ -151,13 +154,13 @@ const utils = {
   /**
    * 时间格式化：秒转 mm:ss
    */
-  formatTime: function (seconds) {
-    var m = Math.floor(seconds / 60).toString();
-    var s = (seconds % 60).toString();
-    if (m.length < 2) m = "0" + m;
-    if (s.length < 2) s = "0" + s;
-    return m + ":" + s;
-  }
+// 格式化倒计时：秒数 → mm:ss
+formatTime: function (seconds) {
+  if (isNaN(seconds) || seconds < 0) return "00:00";
+  const min = Math.floor(seconds / 60).toString().padStart(2, "0");
+  const sec = (seconds % 60).toString().padStart(2, "0");
+  return `${min}:${sec}`;
+},
 };
 
 export default utils;

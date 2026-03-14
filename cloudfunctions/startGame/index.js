@@ -1,112 +1,127 @@
+// 云函数：startGame 开局游戏
 const cloud = require('wx-server-sdk')
-cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV })
+cloud.init({
+  env: cloud.DYNAMIC_CURRENT_ENV
+})
 const db = cloud.database()
 const _ = db.command
 
-// 人数-身份配置表（严格匹配需求文档）
-const ROLE_CONFIG = {
-  4: { undercover: 1, civilian: 3, whiteboard: 0 },
-  5: { undercover: 1, civilian: 4, whiteboard: 0 },
-  6: { undercover: 1, civilian: 4, whiteboard: 1 },
-  7: { undercover: 2, civilian: 5, whiteboard: 0 },
-  8: { undercover: 2, civilian: 6, whiteboard: 0 },
-  9: { undercover: 2, civilian: 7, whiteboard: 0 },
-  10: { undercover: 3, civilian: 7, whiteboard: 0 },
-  11: { undercover: 3, civilian: 8, whiteboard: 0 },
-  12: { undercover: 3, civilian: 9, whiteboard: 0 }
-}
-
-// 洗牌算法
-function shuffleArray(arr) {
-  const newArr = [...arr]
-  for (let i = newArr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [newArr[i], newArr[j]] = [newArr[j], newArr[i]]
-  }
-  return newArr
-}
-
 exports.main = async (event, context) => {
-  const { roomId, playerCount } = event
-  const wxContext = cloud.getWXContext()
-
-  // 1. 查询房间
-  const roomRes = await db.collection('rooms').where({ roomId }).get()
-  if (roomRes.data.length === 0) {
-    return { success: false, msg: "房间不存在" }
-  }
-  const room = roomRes.data[0]
-
-  // 2. 权限校验：仅房主可开始游戏
-  if (room.ownerOpenId !== wxContext.OPENID) {
-    return { success: false, msg: "仅房主可开始游戏" }
+  const { roomId } = event
+  if (!roomId) {
+    return { success: false, msg: "房间号不能为空" }
   }
 
-  // 3. 人数校验
-  const validPlayers = room.players.filter(p => p.isReady || p.openId === room.ownerOpenId)
-  if (validPlayers.length < 4) {
-    return { success: false, msg: "最少4名玩家才能开始游戏" }
-  }
-  if (validPlayers.length > 12) {
-    return { success: false, msg: "最多支持12名玩家" }
-  }
+  try {
+    // 1. 查询房间信息
+    const roomRes = await db.collection('rooms').doc(roomId).get()
+    if (!roomRes.data) {
+      return { success: false, msg: "房间不存在" }
+    }
+    const roomData = roomRes.data
 
-  // 4. 随机抽取一组词语
-  const wordsRes = await db.collection('words').aggregate().sample({ size: 1 }).end()
-  if (wordsRes.list.length === 0) {
-    return { success: false, msg: "词库为空，请先添加词语" }
-  }
-  const wordPair = wordsRes.list[0]
-  const civilianWord = wordPair.word1
-  const undercoverWord = wordPair.word2
+    // 2. 校验房主权限
+    const { OPENID } = cloud.getWXContext()
+    if (roomData.ownerOpenId !== OPENID) {
+      return { success: false, msg: "只有房主可以开始游戏" }
+    }
 
-  // 5. 计算身份数量
-  const playerNum = validPlayers.length
-  const roleNum = ROLE_CONFIG[playerNum]
-  let { undercover, civilian, whiteboard } = roleNum
+    // 3. 校验玩家数量
+    const players = roomData.players
+    if (players.length < 2) {
+      return { success: false, msg: "至少需要2名玩家才能开始游戏" }
+    }
 
-  // 6. 生成身份池
-  let rolePool = []
-  for (let i = 0; i < undercover; i++) rolePool.push('undercover')
-  for (let i = 0; i < civilian; i++) rolePool.push('civilian')
-  for (let i = 0; i < whiteboard; i++) rolePool.push('whiteboard')
-  // 打乱身份池
-  rolePool = shuffleArray(rolePool)
+    // 4. 【核心修复】从词库随机选词，严格匹配字段名
+    const wordRes = await db.collection('words').where({
+      isEnabled: _.neq(false) // 只取启用的词
+    }).get()
+    const wordList = wordRes.data
+    if (wordList.length === 0) {
+      return { success: false, msg: "词库为空，请先在数据库添加词库" }
+    }
+    // 随机选一组词
+    const randomWord = wordList[Math.floor(Math.random() * wordList.length)]
+    const civilianWord = randomWord.civilian
+    const undercoverWord = randomWord.undercover
+    console.log("选中的词对：", { civilianWord, undercoverWord })
 
-  // 7. 给玩家分配身份和词语
-  const newPlayers = room.players.map((player, index) => {
-    const role = rolePool[index]
-    let word = ''
-    if (role === 'civilian') word = civilianWord
-    if (role === 'undercover') word = undercoverWord
-    // 白板无词语
+    // 5. 分配身份和词语
+    const playerCount = players.length
+    // 卧底数量规则：4-6人1个卧底，7-9人2个，10人+3个，白板1个
+    let undercoverCount = 1
+    if (playerCount >= 7 && playerCount <= 9) undercoverCount = 2
+    if (playerCount >= 10) undercoverCount = 3
+    const whiteboardCount = 1 // 白板数量，可根据需求调整
+
+    // 生成身份数组
+    let roles = []
+    // 先加平民
+    for (let i = 0; i < playerCount - undercoverCount - whiteboardCount; i++) {
+      roles.push("CIVILIAN")
+    }
+    // 加卧底
+    for (let i = 0; i < undercoverCount; i++) {
+      roles.push("UNDERCOVER")
+    }
+    // 加白板
+    for (let i = 0; i < whiteboardCount; i++) {
+      roles.push("WHITEBOARD")
+    }
+
+    // 打乱身份顺序
+    roles = roles.sort(() => Math.random() - 0.5)
+
+    // 给每个玩家分配身份、词语、重置状态
+    const newPlayers = players.map((player, index) => {
+      const role = roles[index]
+      let word = ""
+      if (role === "CIVILIAN") word = civilianWord
+      if (role === "UNDERCOVER") word = undercoverWord
+      // 白板没有词语
+      return {
+        ...player,
+        role: role,
+        word: word,
+        isAlive: true,
+        isReady: false,
+        speakDesc: "",
+        hasVoted: false
+      }
+    })
+
+    // 生成发言顺序
+    const speakOrder = newPlayers.map(p => p.openId).sort(() => Math.random() - 0.5)
+
+    // 6. 更新房间数据到数据库
+    await db.collection('rooms').doc(roomId).update({
+      data: {
+        status: "playing", // 房间状态改为游戏中
+        currentRound: 1,
+        currentWordPair: [civilianWord, undercoverWord], // 保存词对
+        players: newPlayers,
+        speakOrder: speakOrder,
+        currentSpeakerIndex: 0,
+        currentPhase: "VIEW_WORD", // 初始阶段：查看词语
+        gameStartTime: db.serverDate(),
+        // 倒计时相关
+        phaseEndTime: db.serverDate({
+          offset: 10 * 1000 // 看词阶段给10秒
+        })
+      }
+    })
+
     return {
-      ...player,
-      role,
-      word,
-      isAlive: true,
-      isReady: false,
-      descHistory: []
+      success: true,
+      msg: "游戏开始成功",
+      data: {
+        currentWordPair: [civilianWord, undercoverWord],
+        players: newPlayers
+      }
     }
-  })
 
-  // 8. 生成初始发言顺序（随机打乱）
-  const speakOrder = shuffleArray(newPlayers.filter(p => p.isAlive).map(p => p.openId))
-
-  // 9. 更新房间状态
-  await db.collection('rooms').doc(room._id).update({
-    data: {
-      status: 'playing',
-      gamePhase: 'viewWord',
-      currentRound: 1,
-      players: newPlayers,
-      currentWordPair: [civilianWord, undercoverWord],
-      speakOrder,
-      currentSpeakerIndex: 0,
-      voteData: {},
-      updateTime: db.serverDate()
-    }
-  })
-
-  return { success: true }
+  } catch (err) {
+    console.error("startGame云函数报错:", err)
+    return { success: false, msg: "开始游戏失败：" + err.message }
+  }
 }
